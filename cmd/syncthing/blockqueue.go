@@ -32,16 +32,26 @@ func newBlockQueue() *blockQueue {
 }
 
 func (q *blockQueue) addBlock(a bqAdd) {
-	// First queue a copy operation
-	q.queued = append(q.queued, bqBlock{
-		file: a.file,
-		copy: a.have,
-	})
-	// Then queue the needed blocks individually
-	for _, b := range a.need {
+	// If we already have it queued, return
+	for _, b := range q.queued {
+		if b.file.Name == a.file.Name {
+			return
+		}
+	}
+	if len(a.have) > 0 {
+		// First queue a copy operation
+		q.queued = append(q.queued, bqBlock{
+			file: a.file,
+			copy: a.have,
+		})
+	}
+	// Queue the needed blocks individually
+	l := len(a.need)
+	for i, b := range a.need {
 		q.queued = append(q.queued, bqBlock{
 			file:  a.file,
 			block: b,
+			last:  i == l-1,
 		})
 	}
 }

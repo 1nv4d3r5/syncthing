@@ -44,6 +44,16 @@ func (m *Map) Name(cid uint) string {
 	return m.toName[cid]
 }
 
+func (m *Map) Names() []string {
+	var names []string
+	for _, name := range m.toName {
+		if name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
 func (m *Map) Clear(name string) {
 	cid, ok := m.toCid[name]
 	if ok {

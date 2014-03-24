@@ -32,9 +32,9 @@ type Model struct {
 
 	dq chan scanner.File // queue for files to delete
 
+	initOnce  sync.Once
 	rwRunning bool
 	delete    bool
-	initmut   sync.Mutex // protects rwRunning and delete
 
 	sup suppressor
 
@@ -99,22 +99,21 @@ func (m *Model) LimitRate(kbps int) {
 // read/write mode the model will attempt to keep in sync with the cluster by
 // pulling needed files from peer nodes.
 func (m *Model) StartRW(del bool, threads int) {
-	// TODO: use sync.Once
-	m.initmut.Lock()
-	defer m.initmut.Unlock()
-
 	if m.rwRunning {
 		panic("starting started model")
 	}
+	m.initOnce.Do(func() {
+		m.rwRunning = true
+		m.delete = del
+		m.parallelRequests = threads
+		m.bq = newBlockQueue()
 
-	m.rwRunning = true
-	m.delete = del
-	m.parallelRequests = threads
-	m.bq = newBlockQueue()
+		if del {
+			go m.deleteLoop()
+		}
 
-	if del {
-		go m.deleteLoop()
-	}
+		go m.puller("default", m.dir, 2)
+	})
 }
 
 // Generation returns an opaque integer that is guaranteed to increment on
@@ -280,10 +279,13 @@ func (m *Model) IndexUpdate(nodeID string, fs []protocol.FileInfo) {
 
 func (m *Model) queueNeededBlocks() {
 	for _, f := range m.fs.Need(cid.LocalID) {
-		gf := m.fs.GetGlobal(f.Name)
-		have, need := scanner.BlockDiff(f.Blocks, gf.Blocks)
+		lf := m.fs.Get(cid.LocalID, f.Name)
+		have, need := scanner.BlockDiff(lf.Blocks, f.Blocks)
+		if debugNeed {
+			dlog.Printf("need:\n  local: %v\n  global: %v\n  haveBlocks: %v\n  needBlocks: %v", lf, f, have, need)
+		}
 		m.bq.put(bqAdd{
-			file: gf,
+			file: f,
 			have: have,
 			need: need,
 		})
