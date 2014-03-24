@@ -29,50 +29,52 @@ type openFile struct {
 	done         bool  // we have sent all requests for this file
 }
 
-const slots = 8
+type activityMap map[string]int
 
-var requestResults chan requestResult
-var openFiles map[string]openFile
-var bq = newBlockQueue()
-var requestQueue = make(chan queuedBlock, slots)
-var oustandingPerNode = make(map[string]int)
-
-var requestSlots = make(chan bool, slots)
-var blocks = make(chan bqBlock)
-
-func (m *Model) leastBusyNode(availability uint64) {
+func (m activityMap) leastBusyNode(availability uint64, model *Model) {
 	var low int = 2<<63 - 1
 	var selected string
-	for node, usage := range oustandingPerNode {
-		if availability&1<<m.cm.Get(node) != 0 {
+	for node, usage := range m {
+		if availability&1<<model.cm.Get(node) != 0 {
 			if usage < low {
 				low = usage
 				selected = node
 			}
 		}
 	}
-	oustandingPerNode[selected]++
+	m[selected]++
 	return selected
 }
 
+func (m activityMap) decrease(node string) {
+	m[node]--
+}
+
 func (m *Model) puller(repo string, dir string) {
+	var oustandingPerNode = make(activityMap)
+	var openFiles = make(map[string]openFile)
+	var requestSlots = make(chan bool, slots)
+	var blocks = make(chan bqBlock)
+	var requestResults = make(chan requestResult)
+
 	for i := 0; i < slots; i++ {
 		requestSlots <- true
 	}
+
 	go func() {
 		// fill blocks queue when there are free slots
 		for {
 			<-requestSlots
-			blocks <- <-bq.outbox
+			blocks <- m.bq.get()
 		}
 	}()
 
 pull:
 	for {
 		select {
-		case res := <-requestResults:
-			oustandingPerNode[res.node]--
-			of, ok := openFiles[res.file]
+		case res := <-m.requestResults:
+			za.decrease(res.node)--
+			of, ok := m.openFiles[res.file]
 			if !ok || of.err != nil {
 				// no entry in openFiles means there was an error and we've cancelled the operation
 				continue
@@ -85,9 +87,8 @@ pull:
 				delete(openFiles, res.file)
 				// Hash check the file and rename
 			}
-			requestSlots <- true
 
-		case b := <-blocks:
+		case b := <-m.blocks:
 			f := b.file
 
 			of, ok := openFiles[f.Name]
@@ -133,15 +134,15 @@ pull:
 
 			if of.block.Size > 0 {
 				openFiles[b.Name].outstanding++
-				// TODO: Select a peer
+				node := oustandingPerNode.leastBusyNode(of.availability, m)
 				go func(node string, b queuedBlock) {
 					bs, err := m.protoConn[node].Request("default", f.name, b.offset, b.size)
 					requestResults <- requestResult{b.name, b.offset, bs, err}
-					requestSlots <- true
+					m.requestSlots <- true
 				}(node, b)
 			} else {
 				// nothing more to do
-				requestSlots <- true
+				m.requestSlots <- true
 			}
 		}
 	}

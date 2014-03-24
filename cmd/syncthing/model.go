@@ -29,6 +29,7 @@ type Model struct {
 	pmut      sync.RWMutex // protects protoConn and rawConn
 
 	bq *blockQueue
+
 	dq chan scanner.File // queue for files to delete
 
 	rwRunning bool
@@ -71,7 +72,6 @@ func NewModel(dir string, maxChangeBw int) *Model {
 		fs:        files.NewSet(),
 		protoConn: make(map[string]Connection),
 		rawConn:   make(map[string]io.Closer),
-		bq:        newBlockQueue(),
 		dq:        make(chan scanner.File),
 		sup:       suppressor{threshold: int64(maxChangeBw)},
 	}
@@ -99,6 +99,7 @@ func (m *Model) LimitRate(kbps int) {
 // read/write mode the model will attempt to keep in sync with the cluster by
 // pulling needed files from peer nodes.
 func (m *Model) StartRW(del bool, threads int) {
+	// TODO: use sync.Once
 	m.initmut.Lock()
 	defer m.initmut.Unlock()
 
@@ -109,6 +110,7 @@ func (m *Model) StartRW(del bool, threads int) {
 	m.rwRunning = true
 	m.delete = del
 	m.parallelRequests = threads
+	m.bq = newBlockQueue()
 
 	if del {
 		go m.deleteLoop()
@@ -278,21 +280,13 @@ func (m *Model) IndexUpdate(nodeID string, fs []protocol.FileInfo) {
 
 func (m *Model) queueNeededBlocks() {
 	for _, f := range m.fs.Need(cid.LocalID) {
-		if !m.bq.contains(f.Name) {
-			gf := m.fs.GetGlobal(f.Name)
-			_, need := scanner.BlockDiff(f.Blocks, gf.Blocks)
-			l := len(need)
-			var offset int64
-			for i, b := range need {
-				m.bq.put(queuedBlock{
-					file:   f.Name,
-					offset: offset,
-					size:   b.Size,
-					last:   i == l-1,
-				})
-				offset += int64(b.Size)
-			}
-		}
+		gf := m.fs.GetGlobal(f.Name)
+		have, need := scanner.BlockDiff(f.Blocks, gf.Blocks)
+		m.bq.put(bqAdd{
+			file: gf,
+			have: have,
+			need: need,
+		})
 	}
 }
 
