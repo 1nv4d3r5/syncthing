@@ -12,6 +12,7 @@ type bqBlock struct {
 	file  scanner.File
 	block scanner.Block   // get this block from the network
 	copy  []scanner.Block // copy these blocks from the old version of the file
+	last  bool
 }
 
 type blockQueue struct {
@@ -63,4 +64,8 @@ func (q *blockQueue) run() {
 
 func (q *blockQueue) put(a bqAdd) {
 	q.inbox <- a
+}
+
+func (q *blockQueue) get() bqBlock {
+	return <-q.outbox
 }

@@ -1,5 +1,3 @@
-//+build ignore
-
 package main
 
 import (
@@ -31,8 +29,8 @@ type openFile struct {
 
 type activityMap map[string]int
 
-func (m activityMap) leastBusyNode(availability uint64, model *Model) {
-	var low int = 2<<63 - 1
+func (m activityMap) leastBusyNode(availability uint64, model *Model) string {
+	var low int = 2<<31 - 1
 	var selected string
 	for node, usage := range m {
 		if availability&1<<model.cm.Get(node) != 0 {
@@ -50,7 +48,7 @@ func (m activityMap) decrease(node string) {
 	m[node]--
 }
 
-func (m *Model) puller(repo string, dir string) {
+func (m *Model) puller(repo string, dir string, slots int) {
 	var oustandingPerNode = make(activityMap)
 	var openFiles = make(map[string]openFile)
 	var requestSlots = make(chan bool, slots)
@@ -72,14 +70,14 @@ func (m *Model) puller(repo string, dir string) {
 pull:
 	for {
 		select {
-		case res := <-m.requestResults:
-			za.decrease(res.node)--
-			of, ok := m.openFiles[res.file]
+		case res := <-requestResults:
+			oustandingPerNode.decrease(res.node)
+			of, ok := openFiles[res.file]
 			if !ok || of.err != nil {
 				// no entry in openFiles means there was an error and we've cancelled the operation
 				continue
 			}
-			of.err = of.file.WriteAt(res.data, res.offset)
+			_, of.err = of.file.WriteAt(res.data, res.offset)
 			buffers.Put(res.data)
 			of.outstanding--
 			if of.done && of.outstanding == 0 {
@@ -88,17 +86,17 @@ pull:
 				// Hash check the file and rename
 			}
 
-		case b := <-m.blocks:
+		case b := <-blocks:
 			f := b.file
 
 			of, ok := openFiles[f.Name]
 			if !ok {
 				of.path = FSNormalize(path.Join(dir, f.Name))
 				of.temp = FSNormalize(path.Join(dir, defTempNamer.TempName(f.Name)))
-				of.availability = m.fs[repo].Availability(f.Name)
+				of.availability = uint64(m.fs.Availability(f.Name))
 				of.done = b.last
 
-				of.file, of.err = os.OpenFile(of.temp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, osFileMode(f.Flags&0777))
+				of.file, of.err = os.OpenFile(of.temp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, os.FileMode(f.Flags&0777))
 				if of.err != nil {
 					openFiles[f.Name] = of
 					continue pull
@@ -107,6 +105,7 @@ pull:
 
 			if len(b.copy) > 0 {
 				// We have blocks to copy from the existing file
+				var exfd *os.File
 				exfd, of.err = os.Open(of.path)
 				if of.err != nil {
 					of.file.Close()
@@ -115,10 +114,10 @@ pull:
 				}
 
 				for _, b := range b.copy {
-					bs := buffers.Get(b.Size)
-					of.err = exfd.ReadAt(bs, b.Offset)
+					bs := buffers.Get(int(b.Size))
+					_, of.err = exfd.ReadAt(bs, b.Offset)
 					if of.err == nil {
-						of.err = of.file.WriteAt(bs, b.Offset)
+						_, of.err = of.file.WriteAt(bs, b.Offset)
 					}
 					buffers.Put(bs)
 					if of.err != nil {
@@ -132,17 +131,26 @@ pull:
 				exfd.Close()
 			}
 
-			if of.block.Size > 0 {
-				openFiles[b.Name].outstanding++
+			if b.block.Size > 0 {
+				of.outstanding--
+				openFiles[f.Name] = of
 				node := oustandingPerNode.leastBusyNode(of.availability, m)
-				go func(node string, b queuedBlock) {
-					bs, err := m.protoConn[node].Request("default", f.name, b.offset, b.size)
-					requestResults <- requestResult{b.name, b.offset, bs, err}
-					m.requestSlots <- true
+				go func(node string, b bqBlock) {
+					bs, err := m.protoConn[node].Request("default", f.Name, b.block.Offset, int(b.block.Size))
+					requestResults <- requestResult{
+						node:   node,
+						repo:   "default",
+						file:   f.Name,
+						path:   of.path,
+						offset: b.block.Offset,
+						data:   bs,
+						err:    err,
+					}
+					requestSlots <- true
 				}(node, b)
 			} else {
 				// nothing more to do
-				m.requestSlots <- true
+				requestSlots <- true
 			}
 		}
 	}
