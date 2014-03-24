@@ -75,9 +75,18 @@ for i in 1 2 3 ; do
 	popd >/dev/null
 done
 
+# file that differs in mtime but not in contents
+echo "  *: identical file"
+dd if=/dev/urandom of=s1/identical bs=1000 count=1000 2>/dev/null
+cp -a s1/identical s2/identical
+cp -a s1/identical s3/identical
+
 # instance 1 common file should be the newest, the other should disappear
 sleep 2
 touch "s1/common"
+
+# s2/identical should be the latest and override the others
+touch "s2/identical"
 
 echo "MD5-summing..."
 for i in 1 2 3 ; do
