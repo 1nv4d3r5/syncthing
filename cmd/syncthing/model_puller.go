@@ -36,8 +36,12 @@ func (m activityMap) leastBusyNode(availability uint64, cm *cid.Map) string {
 	var low int = 2<<31 - 1
 	var selected string
 	for _, node := range cm.Names() {
+		id := cm.Get(node)
+		if id == cid.LocalID {
+			continue
+		}
 		usage := m[node]
-		if availability&(1<<cm.Get(node)) != 0 {
+		if availability&(1<<id) != 0 {
 			if usage < low {
 				low = usage
 				selected = node
@@ -106,9 +110,10 @@ pull:
 				of.file.Close()
 				delete(openFiles, res.file.Name)
 				// TODO: Hash check
-				os.Rename(of.temp, of.path)
 				t := time.Unix(res.file.Modified, 0)
 				os.Chtimes(of.temp, t, t)
+				os.Chmod(of.temp, os.FileMode(res.file.Flags&0777))
+				os.Rename(of.temp, of.path)
 				m.fs.AddLocal([]scanner.File{res.file})
 			}
 
@@ -127,13 +132,13 @@ pull:
 				of.path = FSNormalize(path.Join(dir, f.Name))
 				of.temp = FSNormalize(path.Join(dir, defTempNamer.TempName(f.Name)))
 
-				dirName := path.Base(of.path)
+				dirName := path.Dir(of.path)
 				_, err := os.Stat(dirName)
 				if err != nil {
 					os.MkdirAll(dirName, 0777)
 				}
 
-				of.file, of.err = os.OpenFile(of.temp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, os.FileMode(f.Flags&0777))
+				of.file, of.err = os.Create(of.temp)
 				if of.err != nil {
 					if debugPull {
 						dlog.Printf("pull: %q: %v", f.Name, of.err)
@@ -206,17 +211,30 @@ pull:
 			case b.block.Size > 0:
 				// We have a block to get from the network
 
+				node := oustandingPerNode.leastBusyNode(of.availability, m.cm)
+				if len(node) == 0 {
+					// There was no node available
+					requestSlots <- true
+					continue pull
+				}
+
 				of.outstanding++
 				openFiles[f.Name] = of
 
-				node := oustandingPerNode.leastBusyNode(of.availability, m.cm)
 				go func(node string, b bqBlock) {
 					// TODO: what of locking here?
 					if debugPull {
 						dlog.Printf("pull: requesting %q offset %d size %d from %q outstanding %d", f.Name, b.block.Offset, b.block.Size, node, of.outstanding)
 					}
 
-					bs, err := m.protoConn[node].Request(repo, f.Name, b.block.Offset, int(b.block.Size))
+					m.pmut.Lock()
+					c, ok := m.protoConn[node]
+					m.pmut.Unlock()
+					if !ok {
+						panic("wanted request from nonexistant node " + node)
+					}
+
+					bs, err := c.Request(repo, f.Name, b.block.Offset, int(b.block.Size))
 					requestResults <- requestResult{
 						node:   node,
 						file:   f,
@@ -229,9 +247,22 @@ pull:
 				}(node, b)
 
 			default:
-				if f.Flags&protocol.FlagDeleted != 0 {
-
+				if b.last {
+					if of.err == nil {
+						of.file.Close()
+					}
 				}
+				if f.Flags&protocol.FlagDeleted != 0 {
+					os.Remove(of.temp)
+					os.Remove(of.path)
+				} else {
+					t := time.Unix(f.Modified, 0)
+					os.Chtimes(of.temp, t, t)
+					os.Chmod(of.temp, os.FileMode(f.Flags&0777))
+					os.Rename(of.temp, of.path)
+				}
+				m.fs.AddLocal([]scanner.File{f})
+				requestSlots <- true
 			}
 		}
 	}

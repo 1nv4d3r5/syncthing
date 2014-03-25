@@ -15,6 +15,8 @@ which was given.
 */
 
 import (
+	"sync"
+
 	"github.com/calmh/syncthing/cid"
 	"github.com/calmh/syncthing/protocol"
 	"github.com/calmh/syncthing/scanner"
@@ -44,6 +46,7 @@ func (a key) newerThan(b key) bool {
 }
 
 type Set struct {
+	sync.Mutex
 	changes            int64
 	files              map[key]fileRecord
 	remoteKey          [64]map[string]key
@@ -61,11 +64,15 @@ func NewSet() *Set {
 }
 
 func (m *Set) AddLocal(fs []scanner.File) {
+	m.Lock()
 	m.addRemote(cid.LocalID, fs)
 	m.changes++
+	m.Unlock()
 }
 
 func (m *Set) SetLocal(fs []scanner.File) {
+	m.Lock()
+
 	if len(fs) != len(m.remoteKey[cid.LocalID]) {
 		// We know something changed for sure
 		m.changes++
@@ -100,66 +107,87 @@ func (m *Set) SetLocal(fs []scanner.File) {
 	}
 
 	m.setRemote(cid.LocalID, fs)
+	m.Unlock()
 }
 
 func (m *Set) SetLocalNoDelete(fs []scanner.File) {
+	m.Lock()
 	m.setRemote(cid.LocalID, fs)
 	m.changes++
+	m.Unlock()
 }
 
 func (m *Set) AddRemote(cid uint, fs []scanner.File) {
 	if cid < 1 || cid > 63 {
 		panic("Connection ID must be in the range 1 - 63 inclusive")
 	}
+	m.Lock()
 	m.addRemote(cid, fs)
+	m.Unlock()
 }
 
 func (m *Set) SetRemote(cid uint, fs []scanner.File) {
 	if cid < 1 || cid > 63 {
 		panic("Connection ID must be in the range 1 - 63 inclusive")
 	}
+	m.Lock()
 	m.setRemote(cid, fs)
+	m.Unlock()
 }
 
 func (m *Set) Need(cid uint) []scanner.File {
 	var fs []scanner.File
+	m.Lock()
 	for name, gk := range m.globalKey {
 		if gk.newerThan(m.remoteKey[cid][name]) {
 			fs = append(fs, m.files[gk].File)
 		}
 	}
+	m.Unlock()
 	return fs
 }
 
 func (m *Set) Have(cid uint) []scanner.File {
 	var fs []scanner.File
+	m.Lock()
 	for _, rk := range m.remoteKey[cid] {
 		fs = append(fs, m.files[rk].File)
 	}
+	m.Unlock()
 	return fs
 }
 
 func (m *Set) Global() []scanner.File {
 	var fs []scanner.File
+	m.Lock()
 	for _, rk := range m.globalKey {
 		fs = append(fs, m.files[rk].File)
 	}
+	m.Unlock()
 	return fs
 }
 
 func (m *Set) Get(cid uint, file string) scanner.File {
+	m.Lock()
+	defer m.Unlock()
 	return m.files[m.remoteKey[cid][file]].File
 }
 
 func (m *Set) GetGlobal(file string) scanner.File {
+	m.Lock()
+	defer m.Unlock()
 	return m.files[m.globalKey[file]].File
 }
 
 func (m *Set) Availability(name string) bitset {
+	m.Lock()
+	defer m.Unlock()
 	return m.globalAvailability[name]
 }
 
 func (m *Set) Changes() int64 {
+	m.Lock()
+	defer m.Unlock()
 	return m.changes
 }
 
