@@ -3,11 +3,27 @@ package files
 import (
 	"fmt"
 	"reflect"
+	"sort"
 	"testing"
 
+	"github.com/calmh/syncthing/cid"
 	"github.com/calmh/syncthing/protocol"
 	"github.com/calmh/syncthing/scanner"
 )
+
+type fileList []scanner.File
+
+func (l fileList) Len() int {
+	return len(l)
+}
+
+func (l fileList) Less(a, b int) bool {
+	return l[a].Name < l[b].Name
+}
+
+func (l fileList) Swap(a, b int) {
+	l[a], l[b] = l[b], l[a]
+}
 
 func TestGlobalSet(t *testing.T) {
 	m := NewSet()
@@ -38,8 +54,12 @@ func TestGlobalSet(t *testing.T) {
 	m.Replace(1, remote)
 
 	g := m.Global()
+
+	sort.Sort(fileList(g))
+	sort.Sort(fileList(expectedGlobal))
+
 	if !reflect.DeepEqual(g, expectedGlobal) {
-		t.Errorf("Global incorrect;\n%v !=\n%v", g, expectedGlobal)
+		t.Errorf("Global incorrect;\n A: %v !=\n E: %v", g, expectedGlobal)
 	}
 
 	if lb := len(m.files); lb != 7 {
@@ -58,23 +78,27 @@ func TestLocalDeleted(t *testing.T) {
 	}
 
 	local2 := []scanner.File{
-		local1[1],
-		local1[3],
+		local1[0],
+		local1[2],
 	}
 
 	expectedGlobal := []scanner.File{
 		local1[0],
 		scanner.File{Name: "b", Version: 1001, Flags: protocol.FlagDeleted},
 		local1[2],
-		scanner.File{Name: "d", Version: 1001, Flags: protocol.FlagDeleted},
+		scanner.File{Name: "d", Version: 1002, Flags: protocol.FlagDeleted},
 	}
 
 	m.ReplaceWithDelete(cid.LocalID, local1)
 	m.ReplaceWithDelete(cid.LocalID, local2)
 
 	g := m.Global()
+
+	sort.Sort(fileList(g))
+	sort.Sort(fileList(expectedGlobal))
+
 	if !reflect.DeepEqual(g, expectedGlobal) {
-		t.Errorf("Global incorrect;\n%v !=\n%v", g, expectedGlobal)
+		t.Errorf("Global incorrect;\n A: %v !=\n E: %v", g, expectedGlobal)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/calmh/syncthing/cid"
+	"github.com/calmh/syncthing/lamport"
 	"github.com/calmh/syncthing/protocol"
 	"github.com/calmh/syncthing/scanner"
 )
@@ -106,7 +107,7 @@ func (m *Set) ReplaceWithDelete(id uint, fs []scanner.File) {
 				cf.Flags = protocol.FlagDeleted
 				cf.Blocks = nil
 				cf.Size = 0
-				cf.Version++
+				cf.Version = lamport.Clock(cf.Version)
 				fs = append(fs, cf)
 				if debug {
 					dlog.Println("deleted:", ck.Name)
