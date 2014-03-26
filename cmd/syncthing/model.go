@@ -20,20 +20,16 @@ import (
 )
 
 type Model struct {
-	dir  string
-	cm   *cid.Map
-	fs   *files.Set
-	fmut sync.Mutex
+	dir string
+	cm  *cid.Map
+	fs  *files.Set
 
 	protoConn map[string]Connection
 	rawConn   map[string]io.Closer
 	pmut      sync.RWMutex // protects protoConn and rawConn
 
-	dq chan scanner.File // queue for files to delete
-
 	initOnce  sync.Once
 	rwRunning bool
-	delete    bool
 
 	sup suppressor
 
@@ -70,7 +66,6 @@ func NewModel(dir string, maxChangeBw int) *Model {
 		fs:        files.NewSet(),
 		protoConn: make(map[string]Connection),
 		rawConn:   make(map[string]io.Closer),
-		dq:        make(chan scanner.File),
 		sup:       suppressor{threshold: int64(maxChangeBw)},
 	}
 
@@ -96,17 +91,12 @@ func (m *Model) LimitRate(kbps int) {
 // StartRW starts read/write processing on the current model. When in
 // read/write mode the model will attempt to keep in sync with the cluster by
 // pulling needed files from peer nodes.
-func (m *Model) StartRW(del bool, threads int) {
+func (m *Model) StartRW(threads int) {
 	if m.rwRunning {
 		panic("starting started model")
 	}
 	m.initOnce.Do(func() {
 		m.rwRunning = true
-		m.delete = del
-
-		if del {
-			go m.deleteLoop()
-		}
 
 		newPuller("default", m.dir, m, threads)
 	})
@@ -115,9 +105,7 @@ func (m *Model) StartRW(del bool, threads int) {
 // Generation returns an opaque integer that is guaranteed to increment on
 // every change to the local repository or global model.
 func (m *Model) Generation() uint64 {
-	m.fmut.Lock()
 	c := m.fs.Changes(cid.LocalID)
-	m.fmut.Unlock()
 	return c
 }
 
@@ -135,7 +123,6 @@ func (m *Model) ConnectionStats() map[string]ConnectionInfo {
 		RemoteAddr() net.Addr
 	}
 
-	m.fmut.Lock()
 	m.pmut.RLock()
 
 	var tot int64
@@ -172,7 +159,6 @@ func (m *Model) ConnectionStats() map[string]ConnectionInfo {
 	}
 
 	m.pmut.RUnlock()
-	m.fmut.Unlock()
 
 	return res
 }
@@ -192,28 +178,22 @@ func sizeOf(fs []scanner.File) (files, deleted int, bytes int64) {
 // GlobalSize returns the number of files, deleted files and total bytes for all
 // files in the global model.
 func (m *Model) GlobalSize() (files, deleted int, bytes int64) {
-	m.fmut.Lock()
 	fs := m.fs.Global()
-	m.fmut.Unlock()
 	return sizeOf(fs)
 }
 
 // LocalSize returns the number of files, deleted files and total bytes for all
 // files in the local repository.
 func (m *Model) LocalSize() (files, deleted int, bytes int64) {
-	m.fmut.Lock()
 	fs := m.fs.Have(cid.LocalID)
-	m.fmut.Unlock()
 	return sizeOf(fs)
 }
 
 // InSyncSize returns the number and total byte size of the local files that
 // are in sync with the global model.
 func (m *Model) InSyncSize() (files int, bytes int64) {
-	m.fmut.Lock()
 	gf := m.fs.Global()
 	hf := m.fs.Need(cid.LocalID)
-	m.fmut.Unlock()
 
 	gn, _, gb := sizeOf(gf)
 	hn, _, hb := sizeOf(hf)
@@ -223,9 +203,7 @@ func (m *Model) InSyncSize() (files int, bytes int64) {
 
 // NeedFiles returns the list of currently needed files and the total size.
 func (m *Model) NeedFiles() ([]scanner.File, int64) {
-	m.fmut.Lock()
 	nf := m.fs.Need(cid.LocalID)
-	m.fmut.Unlock()
 
 	var bytes int64
 	for _, f := range nf {
@@ -244,10 +222,8 @@ func (m *Model) Index(nodeID string, fs []protocol.FileInfo) {
 		files[i] = fileFromFileInfo(fs[i])
 	}
 
-	m.fmut.Lock()
 	cid := m.cm.Get(nodeID)
 	m.fs.Replace(cid, files)
-	m.fmut.Unlock()
 
 	if debugNet {
 		dlog.Printf("IDX(in): %s: %d files", nodeID, len(fs))
@@ -263,10 +239,8 @@ func (m *Model) IndexUpdate(nodeID string, fs []protocol.FileInfo) {
 		files[i] = fileFromFileInfo(fs[i])
 	}
 
-	m.fmut.Lock()
 	id := m.cm.Get(nodeID)
 	m.fs.Update(id, files)
-	m.fmut.Unlock()
 
 	if debugNet {
 		dlog.Printf("IDXUP(in): %s: %d files", nodeID, len(files))
@@ -285,11 +259,9 @@ func (m *Model) Close(node string, err error) {
 		warnf("Connection to %s closed: %v", node, err)
 	}
 
-	m.fmut.Lock()
 	cid := m.cm.Get(node)
 	m.fs.Replace(cid, nil)
 	m.cm.Clear(node)
-	m.fmut.Unlock()
 
 	m.pmut.Lock()
 	conn, ok := m.rawConn[node]
@@ -305,9 +277,7 @@ func (m *Model) Close(node string, err error) {
 // Implements the protocol.Model interface.
 func (m *Model) Request(nodeID, repo, name string, offset int64, size int) ([]byte, error) {
 	// Verify that the requested file exists in the local model.
-	m.fmut.Lock()
 	lf := m.fs.Get(cid.LocalID, name)
-	m.fmut.Unlock()
 	if offset > lf.Size {
 		warnf("SECURITY (nonexistent file) REQ(in): %s: %q o=%d s=%d", nodeID, name, offset, size)
 		return nil, ErrNoSuchFile
@@ -343,9 +313,7 @@ func (m *Model) Request(nodeID, repo, name string, offset int64, size int) ([]by
 
 // ReplaceLocal replaces the local repository index with the given list of files.
 func (m *Model) ReplaceLocal(fs []scanner.File) {
-	m.fmut.Lock()
 	m.fs.ReplaceWithDelete(cid.LocalID, fs)
-	m.fmut.Unlock()
 }
 
 // ReplaceLocal replaces the local repository index with the given list of files.
@@ -356,16 +324,12 @@ func (m *Model) SeedLocal(fs []protocol.FileInfo) {
 		sfs[i] = fileFromFileInfo(fs[i])
 	}
 
-	m.fmut.Lock()
 	m.fs.Replace(cid.LocalID, sfs)
-	m.fmut.Unlock()
 }
 
 // Implements scanner.CurrentFiler
 func (m *Model) CurrentFile(file string) scanner.File {
-	m.fmut.Lock()
 	f := m.fs.Get(cid.LocalID, file)
-	m.fmut.Unlock()
 	return f
 }
 
@@ -412,9 +376,7 @@ func (m *Model) AddConnection(rawConn io.Closer, protoConn Connection) {
 func (m *Model) ProtocolIndex() []protocol.FileInfo {
 	var index []protocol.FileInfo
 
-	m.fmut.Lock()
 	fs := m.fs.Have(cid.LocalID)
-	m.fmut.Unlock()
 
 	for _, f := range fs {
 		mf := fileInfoFromFile(f)
@@ -432,9 +394,7 @@ func (m *Model) ProtocolIndex() []protocol.FileInfo {
 }
 
 func (m *Model) updateLocal(f scanner.File) {
-	m.fmut.Lock()
 	m.fs.Update(cid.LocalID, []scanner.File{f})
-	m.fmut.Unlock()
 }
 
 func (m *Model) requestGlobal(nodeID, name string, offset int64, size int, hash []byte) ([]byte, error) {
@@ -458,15 +418,12 @@ func (m *Model) broadcastIndexLoop() {
 	for {
 		time.Sleep(5 * time.Second)
 
-		m.fmut.Lock()
 		c := m.fs.Changes(cid.LocalID)
 		if c == lastChange {
-			m.fmut.Unlock()
 			continue
 		}
 		lastChange = c
 		fs := m.fs.Have(cid.LocalID)
-		m.fmut.Unlock()
 
 		var indexWg sync.WaitGroup
 		indexWg.Add(len(m.protoConn))
@@ -490,21 +447,6 @@ func (m *Model) broadcastIndexLoop() {
 		m.pmut.RUnlock()
 
 		indexWg.Wait()
-	}
-}
-
-func (m *Model) deleteLoop() {
-	for file := range m.dq {
-		if debugPull {
-			dlog.Println("delete", file.Name)
-		}
-		path := FSNormalize(path.Clean(path.Join(m.dir, file.Name)))
-		err := os.Remove(path)
-		if err != nil {
-			warnf("%s: %v", file.Name, err)
-		}
-
-		m.updateLocal(file)
 	}
 }
 

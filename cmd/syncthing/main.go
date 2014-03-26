@@ -262,14 +262,9 @@ func main() {
 	// repository. Does not run when we are in read only (publish only) mode.
 	if !cfg.Options.ReadOnly {
 		if verbose {
-			if cfg.Options.AllowDelete {
-				infoln("Deletes from peer nodes are allowed")
-			} else {
-				infoln("Deletes from peer nodes will be ignored")
-			}
 			okln("Ready to synchronize (read-write)")
 		}
-		m.StartRW(cfg.Options.AllowDelete, cfg.Options.ParallelRequests)
+		m.StartRW(cfg.Options.ParallelRequests)
 	} else if verbose {
 		okln("Ready to synchronize (read only; no external updates accepted)")
 	}

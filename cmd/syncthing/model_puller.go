@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"path"
 	"time"
@@ -104,14 +105,32 @@ func (p *puller) run() {
 	}()
 
 	needTicker := time.Tick(5 * time.Second)
+	walkTicker := time.Tick(time.Duration(cfg.Options.RescanIntervalS) * time.Second)
+
+	sup := &suppressor{threshold: int64(cfg.Options.MaxChangeKbps)}
+	w := &scanner.Walker{
+		Dir:            p.dir,
+		IgnoreFile:     ".stignore",
+		FollowSymlinks: cfg.Options.FollowSymlinks,
+		BlockSize:      BlockSize,
+		TempNamer:      defTempNamer,
+		Suppressor:     sup,
+		CurrentFiler:   p.model,
+	}
 
 	for {
 		select {
 		case res := <-p.requestResults:
+			p.requestSlots <- true
 			p.handleRequestResult(res)
 
 		case b := <-p.blocks:
 			p.handleBlock(b)
+
+		case <-walkTicker:
+			files, _ := w.Walk()
+			p.model.fs.ReplaceWithDelete(cid.LocalID, files)
+			saveIndex(p.model)
 
 		case <-needTicker:
 			if len(p.openFiles) != 0 {
@@ -127,8 +146,9 @@ func (p *puller) run() {
 
 func (p *puller) handleRequestResult(res requestResult) {
 	p.oustandingPerNode.decrease(res.node)
+	f := res.file
 
-	of, ok := p.openFiles[res.file.Name]
+	of, ok := p.openFiles[f.Name]
 	if !ok || of.err != nil {
 		// no entry in openFiles means there was an error and we've cancelled the operation
 		return
@@ -138,33 +158,57 @@ func (p *puller) handleRequestResult(res requestResult) {
 	buffers.Put(res.data)
 
 	of.outstanding--
-	p.openFiles[res.file.Name] = of
+	p.openFiles[f.Name] = of
 
 	if debugPull {
-		dlog.Printf("pull: wrote %q offset %d outstanding %d done %v", res.file, res.offset, of.outstanding, of.done)
+		dlog.Printf("pull: wrote %q offset %d outstanding %d done %v", f, res.offset, of.outstanding, of.done)
 	}
 
 	if of.done && of.outstanding == 0 {
 		if debugPull {
-			dlog.Printf("pull: closing %q", res.file.Name)
+			dlog.Printf("pull: closing %q", f.Name)
 		}
 		of.file.Close()
-		delete(p.openFiles, res.file.Name)
-		if debugPull {
-			dlog.Printf("pull: %#v", p.openFiles[res.file.Name])
+		defer os.Remove(of.temp)
+
+		delete(p.openFiles, f.Name)
+
+		fd, err := os.Open(of.temp)
+		if err != nil {
+			if debugPull {
+				dlog.Printf("pull: %q: %v", f.Name, err)
+			}
+			return
 		}
-		// TODO: Hash check
-		t := time.Unix(res.file.Modified, 0)
+		defer fd.Close()
+
+		hb, _ := scanner.Blocks(fd, BlockSize)
+		if l0, l1 := len(hb), len(f.Blocks); l0 != l1 {
+			if debugPull {
+				dlog.Printf("pull: %q: nblocks %d != %d", f.Name, l0, l1)
+			}
+			return
+		}
+
+		for i := range hb {
+			if bytes.Compare(hb[i].Hash, f.Blocks[i].Hash) != 0 {
+				if debugPull {
+					dlog.Printf("pull: %q: block %d hash mismatch", f.Name, i)
+				}
+				return
+			}
+		}
+
+		t := time.Unix(f.Modified, 0)
 		os.Chtimes(of.temp, t, t)
-		os.Chmod(of.temp, os.FileMode(res.file.Flags&0777))
-		os.Rename(of.temp, of.path)
-		p.model.fs.Update(cid.LocalID, []scanner.File{res.file})
+		os.Chmod(of.temp, os.FileMode(f.Flags&0777))
+		if os.Rename(of.temp, of.path) == nil {
+			p.model.fs.Update(cid.LocalID, []scanner.File{f})
+		}
 	}
 }
 
 func (p *puller) handleBlock(b bqBlock) {
-	// Every path out from here must put a slot back in requestSlots
-
 	f := b.file
 
 	of, ok := p.openFiles[f.Name]
@@ -212,12 +256,15 @@ func (p *puller) handleBlock(b bqBlock) {
 	switch {
 	case len(b.copy) > 0:
 		p.handleCopyBlock(b)
+		p.requestSlots <- true
 
 	case b.block.Size > 0:
 		p.handleRequestBlock(b)
+		// Request slot gets freed in <-p.blocks case
 
 	default:
 		p.handleEmptyBlock(b)
+		p.requestSlots <- true
 	}
 }
 
@@ -239,9 +286,9 @@ func (p *puller) handleCopyBlock(b bqBlock) {
 		of.file.Close()
 
 		p.openFiles[f.Name] = of
-		p.requestSlots <- true
 		return
 	}
+	defer exfd.Close()
 
 	for _, b := range b.copy {
 		bs := buffers.Get(int(b.Size))
@@ -258,12 +305,9 @@ func (p *puller) handleCopyBlock(b bqBlock) {
 			of.file.Close()
 
 			p.openFiles[f.Name] = of
-			p.requestSlots <- true
 			return
 		}
 	}
-
-	exfd.Close()
 }
 
 func (p *puller) handleRequestBlock(b bqBlock) {
@@ -305,7 +349,6 @@ func (p *puller) handleRequestBlock(b bqBlock) {
 			data:   bs,
 			err:    err,
 		}
-		p.requestSlots <- true
 	}(node, b)
 }
 
@@ -333,7 +376,6 @@ func (p *puller) handleEmptyBlock(b bqBlock) {
 	}
 	delete(p.openFiles, f.Name)
 	p.model.fs.Update(cid.LocalID, []scanner.File{f})
-	p.requestSlots <- true
 }
 
 func (p *puller) queueNeededBlocks() {
