@@ -14,6 +14,7 @@ import (
 	"github.com/calmh/syncthing/buffers"
 	"github.com/calmh/syncthing/cid"
 	"github.com/calmh/syncthing/files"
+	"github.com/calmh/syncthing/lamport"
 	"github.com/calmh/syncthing/protocol"
 	"github.com/calmh/syncthing/scanner"
 )
@@ -28,8 +29,6 @@ type Model struct {
 	rawConn   map[string]io.Closer
 	pmut      sync.RWMutex // protects protoConn and rawConn
 
-	bq *blockQueue
-
 	dq chan scanner.File // queue for files to delete
 
 	initOnce  sync.Once
@@ -38,7 +37,6 @@ type Model struct {
 
 	sup suppressor
 
-	parallelRequests int
 	limitRequestRate chan struct{}
 
 	imut sync.Mutex // protects Index
@@ -105,22 +103,20 @@ func (m *Model) StartRW(del bool, threads int) {
 	m.initOnce.Do(func() {
 		m.rwRunning = true
 		m.delete = del
-		m.parallelRequests = threads
-		m.bq = newBlockQueue()
 
 		if del {
 			go m.deleteLoop()
 		}
 
-		go m.puller("default", m.dir, 2)
+		newPuller("default", m.dir, m, threads)
 	})
 }
 
 // Generation returns an opaque integer that is guaranteed to increment on
 // every change to the local repository or global model.
-func (m *Model) Generation() int64 {
+func (m *Model) Generation() uint64 {
 	m.fmut.Lock()
-	c := m.fs.Changes()
+	c := m.fs.Changes(cid.LocalID)
 	m.fmut.Unlock()
 	return c
 }
@@ -244,13 +240,13 @@ func (m *Model) NeedFiles() ([]scanner.File, int64) {
 func (m *Model) Index(nodeID string, fs []protocol.FileInfo) {
 	var files = make([]scanner.File, len(fs))
 	for i := range fs {
+		lamport.Clock(fs[i].Version)
 		files[i] = fileFromFileInfo(fs[i])
 	}
 
 	m.fmut.Lock()
 	cid := m.cm.Get(nodeID)
 	m.fs.Replace(cid, files)
-	m.queueNeededBlocks()
 	m.fmut.Unlock()
 
 	if debugNet {
@@ -263,32 +259,17 @@ func (m *Model) Index(nodeID string, fs []protocol.FileInfo) {
 func (m *Model) IndexUpdate(nodeID string, fs []protocol.FileInfo) {
 	var files = make([]scanner.File, len(fs))
 	for i := range fs {
+		lamport.Clock(fs[i].Version)
 		files[i] = fileFromFileInfo(fs[i])
 	}
 
 	m.fmut.Lock()
 	id := m.cm.Get(nodeID)
 	m.fs.Update(id, files)
-	m.queueNeededBlocks()
 	m.fmut.Unlock()
 
 	if debugNet {
 		dlog.Printf("IDXUP(in): %s: %d files", nodeID, len(files))
-	}
-}
-
-func (m *Model) queueNeededBlocks() {
-	for _, f := range m.fs.Need(cid.LocalID) {
-		lf := m.fs.Get(cid.LocalID, f.Name)
-		have, need := scanner.BlockDiff(lf.Blocks, f.Blocks)
-		if debugNeed {
-			dlog.Printf("need:\n  local: %v\n  global: %v\n  haveBlocks: %v\n  needBlocks: %v", lf, f, have, need)
-		}
-		m.bq.put(bqAdd{
-			file: f,
-			have: have,
-			need: need,
-		})
 	}
 }
 
@@ -371,6 +352,7 @@ func (m *Model) ReplaceLocal(fs []scanner.File) {
 func (m *Model) SeedLocal(fs []protocol.FileInfo) {
 	var sfs = make([]scanner.File, len(fs))
 	for i := 0; i < len(fs); i++ {
+		lamport.Clock(fs[i].Version)
 		sfs[i] = fileFromFileInfo(fs[i])
 	}
 
@@ -472,12 +454,12 @@ func (m *Model) requestGlobal(nodeID, name string, offset int64, size int, hash 
 }
 
 func (m *Model) broadcastIndexLoop() {
-	var lastChange int64
+	var lastChange uint64
 	for {
 		time.Sleep(5 * time.Second)
 
 		m.fmut.Lock()
-		c := m.fs.Changes()
+		c := m.fs.Changes(cid.LocalID)
 		if c == lastChange {
 			m.fmut.Unlock()
 			continue

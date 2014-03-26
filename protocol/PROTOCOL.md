@@ -134,7 +134,9 @@ response to the Index message.
     +                      Modified (64 bits)                       +
     |                                                               |
     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-    |                            Version                            |
+    |                                                               |
+    +                       Version (64 bits)                       +
+    |                                                               |
     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
     |                       Number of Blocks                        |
     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
@@ -167,10 +169,10 @@ relative to the repository root. The Name is always in UTF-8 NFC regardless
 of operating system or file system specific conventions. The combination of
 Repository and Name uniquely identifies each file in a cluster.
 
-The Version field is a counter that is initially zero for each file. It
-is incremented each time a change is detected. The combination of
-Repository, Name and Version uniquely identifies the contents of a file
-at a certain point in time.
+The Version field is the value of a cluster wide Lamport clock indicating
+when the change was detected. The clock ticks on every detected and received
+change. The combination of Repository, Name and Version uniquely identifies
+the contents of a file at a certain point in time.
 
 The Flags field is made up of the following single bit flags:
 
@@ -220,7 +222,7 @@ block which may represent a smaller amount of data.
         string Name<>;
         unsigned int Flags;
         hyper Modified;
-        unsigned int Version;
+        unsigned hyper Version;
         BlockInfo Blocks<>;
     }
 

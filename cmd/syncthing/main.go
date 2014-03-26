@@ -274,11 +274,6 @@ func main() {
 		okln("Ready to synchronize (read only; no external updates accepted)")
 	}
 
-	if verbose {
-		// Periodically print statistics
-		go printStatsLoop(m)
-	}
-
 	select {}
 }
 
@@ -349,37 +344,6 @@ func saveConfigLoop(cfgFile string) {
 
 func saveConfig() {
 	saveConfigCh <- struct{}{}
-}
-
-func printStatsLoop(m *Model) {
-	var lastUpdated int64
-	var lastStats = make(map[string]ConnectionInfo)
-
-	for {
-		time.Sleep(60 * time.Second)
-
-		for node, stats := range m.ConnectionStats() {
-			secs := time.Since(lastStats[node].At).Seconds()
-			inbps := 8 * int(float64(stats.InBytesTotal-lastStats[node].InBytesTotal)/secs)
-			outbps := 8 * int(float64(stats.OutBytesTotal-lastStats[node].OutBytesTotal)/secs)
-
-			if inbps+outbps > 0 {
-				infof("%s: %sb/s in, %sb/s out", node[0:5], MetricPrefix(int64(inbps)), MetricPrefix(int64(outbps)))
-			}
-
-			lastStats[node] = stats
-		}
-
-		if lu := m.Generation(); lu > lastUpdated {
-			lastUpdated = lu
-			files, _, bytes := m.GlobalSize()
-			infof("%6d files, %9sB in cluster", files, BinaryPrefix(bytes))
-			files, _, bytes = m.LocalSize()
-			infof("%6d files, %9sB in local repo", files, BinaryPrefix(bytes))
-			needFiles, bytes := m.NeedFiles()
-			infof("%6d files, %9sB to synchronize", len(needFiles), BinaryPrefix(bytes))
-		}
-	}
 }
 
 func listenConnect(myID string, disc *discover.Discoverer, m *Model, tlsCfg *tls.Config, connOpts map[string]string) {

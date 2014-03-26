@@ -54,6 +54,14 @@ func (q *blockQueue) addBlock(a bqAdd) {
 			last:  i == l-1,
 		})
 	}
+
+	if l == 0 {
+		// If we didn't have anything to fetch, queue an empty block with the "last" flag set to close the file.
+		q.queued = append(q.queued, bqBlock{
+			file: a.file,
+			last: true,
+		})
+	}
 }
 
 func (q *blockQueue) run() {

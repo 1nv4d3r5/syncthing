@@ -6,7 +6,7 @@ type File struct {
 	Name       string
 	Flags      uint32
 	Modified   int64
-	Version    uint32
+	Version    uint64
 	Size       int64
 	Blocks     []Block
 	Suppressed bool

@@ -1,20 +1,8 @@
 // Package files provides a set type to track local/remote files with newness checks.
 package files
 
-/*
-
-Delete and version handling
-
-SetLocal handles deletes. Any files currently in the local set that are
-missing in the new set are marked as deleted. This is done by bumping the
-version and clearing the size and blocks fields.
-
-SetLocalNoDelete does not do this; it simply replaces the local set with that
-which was given.
-
-*/
-
 import (
+	"crypto/md5"
 	"sync"
 
 	"github.com/calmh/syncthing/cid"
@@ -23,8 +11,10 @@ import (
 )
 
 type key struct {
-	Name    string
-	Version uint32
+	Name     string
+	Version  uint64
+	Modified int64
+	Hash     [md5.Size]byte
 }
 
 type fileRecord struct {
@@ -35,21 +25,38 @@ type fileRecord struct {
 type bitset uint64
 
 func keyFor(f scanner.File) key {
+	h := md5.New()
+	for _, b := range f.Blocks {
+		h.Write(b.Hash)
+	}
 	return key{
-		Name:    f.Name,
-		Version: f.Version,
+		Name:     f.Name,
+		Version:  f.Version,
+		Modified: f.Modified,
+		Hash:     md5.Sum(nil),
 	}
 }
 
 func (a key) newerThan(b key) bool {
-	return a.Version > b.Version
+	if a.Version != b.Version {
+		return a.Version > b.Version
+	}
+	if a.Modified != b.Modified {
+		return a.Modified > b.Modified
+	}
+	for i := 0; i < md5.Size; i++ {
+		if a.Hash[i] != b.Hash[i] {
+			return a.Hash[i] > b.Hash[i]
+		}
+	}
+	return false
 }
 
 type Set struct {
 	sync.Mutex
-	changes            int64
 	files              map[key]fileRecord
 	remoteKey          [64]map[string]key
+	changes            [64]uint64
 	globalAvailability map[string]bitset
 	globalKey          map[string]key
 }
@@ -63,10 +70,16 @@ func NewSet() *Set {
 	return &m
 }
 
-func (m *Set) Update(id uint, fs []scanner.File) {
+func (m *Set) Replace(id uint, fs []scanner.File) {
+	if id > 63 {
+		panic("Connection ID must be in the range 0 - 63 inclusive")
+	}
+
 	m.Lock()
-	m.update(id, fs)
-	m.changes++
+	if !m.equals(id, fs) {
+		m.changes[id]++
+		m.replace(id, fs)
+	}
 	m.Unlock()
 }
 
@@ -74,52 +87,42 @@ func (m *Set) ReplaceWithDelete(id uint, fs []scanner.File) {
 	if id > 63 {
 		panic("Connection ID must be in the range 0 - 63 inclusive")
 	}
+
 	m.Lock()
+	if !m.equals(id, fs) {
+		m.changes[id]++
 
-	if len(fs) != len(m.remoteKey[cid.LocalID]) {
-		// We know something changed for sure
-		m.changes++
-	}
+		var nf = make(map[string]key, len(fs))
+		for _, f := range fs {
+			nf[f.Name] = keyFor(f)
+		}
 
-	var nf = make(map[string]key, len(fs))
-	for _, f := range fs {
-		nf[f.Name] = keyFor(f)
-	}
+		// For previously existing files not in the list, add them to the list
+		// with the relevant delete flags etc set.
 
-	// For previously existing files not in the list, add them to the list
-	// with the relevant delete flags etc set.
-
-	for _, ck := range m.remoteKey[cid.LocalID] {
-		if nk, ok := nf[ck.Name]; !ok {
-			cf := m.files[ck].File
-			cf.Flags = protocol.FlagDeleted
-			cf.Blocks = nil
-			cf.Size = 0
-			cf.Version++
-			fs = append(fs, cf)
-			m.changes++
-			if debug {
-				dlog.Println("deleted:", ck.Name)
-			}
-		} else if nk != ck {
-			m.changes++
-			if debug {
-				dlog.Println("changed:", ck, nk)
+		for _, ck := range m.remoteKey[cid.LocalID] {
+			if _, ok := nf[ck.Name]; !ok {
+				cf := m.files[ck].File
+				cf.Flags = protocol.FlagDeleted
+				cf.Blocks = nil
+				cf.Size = 0
+				cf.Version++
+				fs = append(fs, cf)
+				if debug {
+					dlog.Println("deleted:", ck.Name)
+				}
 			}
 		}
-	}
 
-	m.replace(id, fs)
+		m.replace(id, fs)
+	}
 	m.Unlock()
 }
 
-func (m *Set) Replace(id uint, fs []scanner.File) {
-	if id > 63 {
-		panic("Connection ID must be in the range 0 - 63 inclusive")
-	}
+func (m *Set) Update(id uint, fs []scanner.File) {
 	m.Lock()
-	m.replace(id, fs)
-	m.changes++
+	m.update(id, fs)
+	m.changes[id]++
 	m.Unlock()
 }
 
@@ -173,10 +176,23 @@ func (m *Set) Availability(name string) bitset {
 	return m.globalAvailability[name]
 }
 
-func (m *Set) Changes() int64 {
+func (m *Set) Changes(id uint) uint64 {
 	m.Lock()
 	defer m.Unlock()
-	return m.changes
+	return m.changes[id]
+}
+
+func (m *Set) equals(id uint, fs []scanner.File) bool {
+	s := m.remoteKey[id]
+	if len(s) != len(fs) {
+		return false
+	}
+	for _, f := range fs {
+		if s[f.Name] != keyFor(f) {
+			return false
+		}
+	}
+	return true
 }
 
 func (m *Set) update(cid uint, fs []scanner.File) {

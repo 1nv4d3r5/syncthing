@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"github.com/calmh/syncthing/lamport"
 
 	"code.google.com/p/go.text/unicode/norm"
 )
@@ -182,8 +183,6 @@ func (w *Walker) walkAndHashFiles(res *[]File, ign map[string][]string) filepath
 		}
 
 		if info.Mode()&os.ModeType == 0 {
-			var version uint32
-
 			if w.CurrentFiler != nil {
 				cf := w.CurrentFiler.CurrentFile(rn)
 				if cf.Modified == info.ModTime().Unix() {
@@ -210,8 +209,6 @@ func (w *Walker) walkAndHashFiles(res *[]File, ign map[string][]string) filepath
 					log.Printf("INFO: Changes to %q are no longer suppressed.", p)
 					delete(w.suppressed, rn)
 				}
-
-				version = cf.Version + 1
 			}
 
 			fd, err := os.Open(p)
@@ -237,7 +234,7 @@ func (w *Walker) walkAndHashFiles(res *[]File, ign map[string][]string) filepath
 			}
 			f := File{
 				Name:     rn,
-				Version:  version,
+				Version:  lamport.Clock(0),
 				Size:     info.Size(),
 				Flags:    uint32(info.Mode()),
 				Modified: info.ModTime().Unix(),
