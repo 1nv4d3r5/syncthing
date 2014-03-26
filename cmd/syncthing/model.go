@@ -249,7 +249,7 @@ func (m *Model) Index(nodeID string, fs []protocol.FileInfo) {
 
 	m.fmut.Lock()
 	cid := m.cm.Get(nodeID)
-	m.fs.SetRemote(cid, files)
+	m.fs.Replace(cid, files)
 	m.queueNeededBlocks()
 	m.fmut.Unlock()
 
@@ -268,7 +268,7 @@ func (m *Model) IndexUpdate(nodeID string, fs []protocol.FileInfo) {
 
 	m.fmut.Lock()
 	id := m.cm.Get(nodeID)
-	m.fs.AddRemote(id, files)
+	m.fs.Update(id, files)
 	m.queueNeededBlocks()
 	m.fmut.Unlock()
 
@@ -306,7 +306,7 @@ func (m *Model) Close(node string, err error) {
 
 	m.fmut.Lock()
 	cid := m.cm.Get(node)
-	m.fs.SetRemote(cid, nil)
+	m.fs.Replace(cid, nil)
 	m.cm.Clear(node)
 	m.fmut.Unlock()
 
@@ -363,7 +363,7 @@ func (m *Model) Request(nodeID, repo, name string, offset int64, size int) ([]by
 // ReplaceLocal replaces the local repository index with the given list of files.
 func (m *Model) ReplaceLocal(fs []scanner.File) {
 	m.fmut.Lock()
-	m.fs.SetLocal(fs)
+	m.fs.ReplaceWithDelete(cid.LocalID, fs)
 	m.fmut.Unlock()
 }
 
@@ -375,7 +375,7 @@ func (m *Model) SeedLocal(fs []protocol.FileInfo) {
 	}
 
 	m.fmut.Lock()
-	m.fs.SetLocalNoDelete(sfs)
+	m.fs.Replace(cid.LocalID, sfs)
 	m.fmut.Unlock()
 }
 
@@ -451,7 +451,7 @@ func (m *Model) ProtocolIndex() []protocol.FileInfo {
 
 func (m *Model) updateLocal(f scanner.File) {
 	m.fmut.Lock()
-	m.fs.AddLocal([]scanner.File{f})
+	m.fs.Update(cid.LocalID, []scanner.File{f})
 	m.fmut.Unlock()
 }
 

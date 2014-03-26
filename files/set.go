@@ -63,14 +63,17 @@ func NewSet() *Set {
 	return &m
 }
 
-func (m *Set) AddLocal(fs []scanner.File) {
+func (m *Set) Update(id uint, fs []scanner.File) {
 	m.Lock()
-	m.addRemote(cid.LocalID, fs)
+	m.update(id, fs)
 	m.changes++
 	m.Unlock()
 }
 
-func (m *Set) SetLocal(fs []scanner.File) {
+func (m *Set) ReplaceWithDelete(id uint, fs []scanner.File) {
+	if id > 63 {
+		panic("Connection ID must be in the range 0 - 63 inclusive")
+	}
 	m.Lock()
 
 	if len(fs) != len(m.remoteKey[cid.LocalID]) {
@@ -106,32 +109,17 @@ func (m *Set) SetLocal(fs []scanner.File) {
 		}
 	}
 
-	m.setRemote(cid.LocalID, fs)
+	m.replace(id, fs)
 	m.Unlock()
 }
 
-func (m *Set) SetLocalNoDelete(fs []scanner.File) {
+func (m *Set) Replace(id uint, fs []scanner.File) {
+	if id > 63 {
+		panic("Connection ID must be in the range 0 - 63 inclusive")
+	}
 	m.Lock()
-	m.setRemote(cid.LocalID, fs)
+	m.replace(id, fs)
 	m.changes++
-	m.Unlock()
-}
-
-func (m *Set) AddRemote(cid uint, fs []scanner.File) {
-	if cid < 1 || cid > 63 {
-		panic("Connection ID must be in the range 1 - 63 inclusive")
-	}
-	m.Lock()
-	m.addRemote(cid, fs)
-	m.Unlock()
-}
-
-func (m *Set) SetRemote(cid uint, fs []scanner.File) {
-	if cid < 1 || cid > 63 {
-		panic("Connection ID must be in the range 1 - 63 inclusive")
-	}
-	m.Lock()
-	m.setRemote(cid, fs)
 	m.Unlock()
 }
 
@@ -191,7 +179,7 @@ func (m *Set) Changes() int64 {
 	return m.changes
 }
 
-func (m *Set) addRemote(cid uint, fs []scanner.File) {
+func (m *Set) update(cid uint, fs []scanner.File) {
 	remFiles := m.remoteKey[cid]
 	for _, f := range fs {
 		n := f.Name
@@ -229,7 +217,7 @@ func (m *Set) addRemote(cid uint, fs []scanner.File) {
 	}
 }
 
-func (m *Set) setRemote(cid uint, fs []scanner.File) {
+func (m *Set) replace(cid uint, fs []scanner.File) {
 	// Decrement usage for all files belonging to this remote, and remove
 	// those that are no longer needed.
 	for _, fk := range m.remoteKey[cid] {
@@ -275,5 +263,5 @@ func (m *Set) setRemote(cid uint, fs []scanner.File) {
 	}
 
 	// Add new remote remoteKey to the mix
-	m.addRemote(cid, fs)
+	m.update(cid, fs)
 }

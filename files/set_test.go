@@ -34,8 +34,8 @@ func TestGlobalSet(t *testing.T) {
 		scanner.File{Name: "e", Version: 1000},
 	}
 
-	m.SetLocal(local)
-	m.SetRemote(1, remote)
+	m.ReplaceWithDelete(cid.LocalID, local)
+	m.Replace(1, remote)
 
 	g := m.Global()
 	if !reflect.DeepEqual(g, expectedGlobal) {
@@ -69,8 +69,8 @@ func TestLocalDeleted(t *testing.T) {
 		scanner.File{Name: "d", Version: 1001, Flags: protocol.FlagDeleted},
 	}
 
-	m.SetLocal(local1)
-	m.SetLocal(local2)
+	m.ReplaceWithDelete(cid.LocalID, local1)
+	m.ReplaceWithDelete(cid.LocalID, local2)
 
 	g := m.Global()
 	if !reflect.DeepEqual(g, expectedGlobal) {
@@ -91,11 +91,11 @@ func BenchmarkSetLocal10k(b *testing.B) {
 		remote = append(remote, scanner.File{Name: fmt.Sprintf("file%d"), Version: 1000})
 	}
 
-	m.SetRemote(1, remote)
+	m.Replace(1, remote)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		m.SetLocal(local)
+		m.ReplaceWithDelete(cid.LocalID, local)
 	}
 }
 
@@ -112,11 +112,11 @@ func BenchmarkSetLocal10(b *testing.B) {
 		remote = append(remote, scanner.File{Name: fmt.Sprintf("file%d"), Version: 1000})
 	}
 
-	m.SetRemote(1, remote)
+	m.Replace(1, remote)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		m.SetLocal(local)
+		m.ReplaceWithDelete(cid.LocalID, local)
 	}
 }
 
@@ -133,8 +133,8 @@ func BenchmarkAddLocal10k(b *testing.B) {
 		remote = append(remote, scanner.File{Name: fmt.Sprintf("file%d"), Version: 1000})
 	}
 
-	m.SetRemote(1, remote)
-	m.SetLocal(local)
+	m.Replace(1, remote)
+	m.ReplaceWithDelete(cid.LocalID, local)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -143,7 +143,7 @@ func BenchmarkAddLocal10k(b *testing.B) {
 			local[j].Version++
 		}
 		b.StartTimer()
-		m.AddLocal(local)
+		m.Update(cid.LocalID, local)
 	}
 }
 
@@ -160,15 +160,15 @@ func BenchmarkAddLocal10(b *testing.B) {
 		remote = append(remote, scanner.File{Name: fmt.Sprintf("file%d"), Version: 1000})
 	}
 
-	m.SetRemote(1, remote)
-	m.SetLocal(local)
+	m.Replace(1, remote)
+	m.ReplaceWithDelete(cid.LocalID, local)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		for j := range local {
 			local[j].Version++
 		}
-		m.AddLocal(local)
+		m.Update(cid.LocalID, local)
 	}
 }
 
@@ -196,9 +196,9 @@ func TestGlobalReset(t *testing.T) {
 		"d": keyFor(local[3]),
 	}
 
-	m.SetLocal(local)
-	m.SetRemote(1, remote)
-	m.SetRemote(1, nil)
+	m.ReplaceWithDelete(cid.LocalID, local)
+	m.Replace(1, remote)
+	m.Replace(1, nil)
 
 	if !reflect.DeepEqual(m.globalKey, expectedGlobalKey) {
 		t.Errorf("Global incorrect;\n%v !=\n%v", m.globalKey, expectedGlobalKey)
@@ -232,8 +232,8 @@ func TestNeed(t *testing.T) {
 		scanner.File{Name: "e", Version: 1000},
 	}
 
-	m.SetLocal(local)
-	m.SetRemote(1, remote)
+	m.ReplaceWithDelete(cid.LocalID, local)
+	m.Replace(1, remote)
 
 	need := m.Need(0)
 	if !reflect.DeepEqual(need, shouldNeed) {

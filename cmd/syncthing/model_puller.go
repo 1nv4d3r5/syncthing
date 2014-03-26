@@ -114,7 +114,7 @@ pull:
 				os.Chtimes(of.temp, t, t)
 				os.Chmod(of.temp, os.FileMode(res.file.Flags&0777))
 				os.Rename(of.temp, of.path)
-				m.fs.AddLocal([]scanner.File{res.file})
+				m.fs.Update(cid.LocalID, []scanner.File{res.file})
 			}
 
 			openFiles[res.file.Name] = of
@@ -261,7 +261,7 @@ pull:
 					os.Chmod(of.temp, os.FileMode(f.Flags&0777))
 					os.Rename(of.temp, of.path)
 				}
-				m.fs.AddLocal([]scanner.File{f})
+				m.fs.Update(cid.LocalID, []scanner.File{f})
 				requestSlots <- true
 			}
 		}
