@@ -11,7 +11,7 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"os/exec"
-	"path"
+	"path/filepath"
 	"runtime"
 	"runtime/debug"
 	"strings"
@@ -106,7 +106,7 @@ func main() {
 
 	// Prepare to be able to save configuration
 
-	cfgFile := path.Join(confDir, "config.xml")
+	cfgFile := filepath.Join(confDir, "config.xml")
 	go saveConfigLoop(cfgFile)
 
 	// Load the configuration file, if it exists.
@@ -122,13 +122,13 @@ func main() {
 		cf.Close()
 	} else {
 		// No config.xml, let's try the old syncthing.ini
-		iniFile := path.Join(confDir, "syncthing.ini")
+		iniFile := filepath.Join(confDir, "syncthing.ini")
 		cf, err := os.Open(iniFile)
 		if err == nil {
 			infoln("Migrating syncthing.ini to config.xml")
 			iniCfg := ini.Parse(cf)
 			cf.Close()
-			os.Rename(iniFile, path.Join(confDir, "migrated_syncthing.ini"))
+			os.Rename(iniFile, filepath.Join(confDir, "migrated_syncthing.ini"))
 
 			cfg, _ = readConfigXML(nil)
 			cfg.Repositories = []RepositoryConfiguration{
@@ -153,7 +153,7 @@ func main() {
 		cfg, err = readConfigXML(nil)
 		cfg.Repositories = []RepositoryConfiguration{
 			{
-				Directory: path.Join(getHomeDir(), "Sync"),
+				Directory: filepath.Join(getHomeDir(), "Sync"),
 				Nodes: []NodeConfiguration{
 					{NodeID: myID, Addresses: []string{"dynamic"}},
 				},
@@ -477,7 +477,7 @@ func updateLocalModel(m *Model, w *scanner.Walker) {
 
 func saveIndex(m *Model) {
 	name := m.RepoID() + ".idx.gz"
-	fullName := path.Join(confDir, name)
+	fullName := filepath.Join(confDir, name)
 	idxf, err := os.Create(fullName + ".tmp")
 	if err != nil {
 		return
@@ -496,7 +496,7 @@ func saveIndex(m *Model) {
 
 func loadIndex(m *Model) {
 	name := m.RepoID() + ".idx.gz"
-	idxf, err := os.Open(path.Join(confDir, name))
+	idxf, err := os.Open(filepath.Join(confDir, name))
 	if err != nil {
 		return
 	}
@@ -559,7 +559,7 @@ func getHomeDir() string {
 
 func getDefaultConfDir() string {
 	if runtime.GOOS == "windows" {
-		return path.Join(os.Getenv("AppData"), "syncthing")
+		return filepath.Join(os.Getenv("AppData"), "syncthing")
 	}
 	return expandTilde("~/.syncthing")
 }

@@ -3,7 +3,7 @@ package main
 import (
 	"bytes"
 	"os"
-	"path"
+	"path/filepath"
 	"time"
 
 	"github.com/calmh/syncthing/buffers"
@@ -13,17 +13,17 @@ import (
 )
 
 type requestResult struct {
-	node   string
-	file   scanner.File
-	path   string // full path name, fs-normalized
-	offset int64
-	data   []byte
-	err    error
+	node     string
+	file     scanner.File
+	filepath string // full filepath name
+	offset   int64
+	data     []byte
+	err      error
 }
 
 type openFile struct {
-	path         string // full path name, fs-normalized
-	temp         string // temporary filename, full path, fs-normalized
+	filepath     string // full filepath name
+	temp         string // temporary filename
 	availability uint64 // availability bitset
 	file         *os.File
 	err          error // error when opening or writing to file, all following operations are cancelled
@@ -34,7 +34,7 @@ type openFile struct {
 type activityMap map[string]int
 
 func (m activityMap) leastBusyNode(availability uint64, cm *cid.Map) string {
-	var low int = 2<<31 - 1
+	var low int = 2<<30 - 1
 	var selected string
 	for _, node := range cm.Names() {
 		id := cm.Get(node)
@@ -202,7 +202,7 @@ func (p *puller) handleRequestResult(res requestResult) {
 		t := time.Unix(f.Modified, 0)
 		os.Chtimes(of.temp, t, t)
 		os.Chmod(of.temp, os.FileMode(f.Flags&0777))
-		if os.Rename(of.temp, of.path) == nil {
+		if os.Rename(of.temp, of.filepath) == nil {
 			p.model.fs.Update(cid.LocalID, []scanner.File{f})
 		}
 	}
@@ -216,10 +216,10 @@ func (p *puller) handleBlock(b bqBlock) {
 		if debugPull {
 			dlog.Printf("pull: opening file %q", f.Name)
 		}
-		of.path = FSNormalize(path.Join(p.dir, f.Name))
-		of.temp = FSNormalize(path.Join(p.dir, defTempNamer.TempName(f.Name)))
+		of.filepath = filepath.Join(p.dir, f.Name)
+		of.temp = filepath.Join(p.dir, defTempNamer.TempName(f.Name))
 
-		dirName := path.Dir(of.path)
+		dirName := filepath.Dir(of.filepath)
 		_, err := os.Stat(dirName)
 		if err != nil {
 			os.MkdirAll(dirName, 0777)
@@ -278,7 +278,7 @@ func (p *puller) handleCopyBlock(b bqBlock) {
 	}
 
 	var exfd *os.File
-	exfd, of.err = os.Open(of.path)
+	exfd, of.err = os.Open(of.filepath)
 	if of.err != nil {
 		if debugPull {
 			dlog.Printf("pull: %q: %v", f.Name, of.err)
@@ -342,12 +342,12 @@ func (p *puller) handleRequestBlock(b bqBlock) {
 
 		bs, err := c.Request(p.repo, f.Name, b.block.Offset, int(b.block.Size))
 		p.requestResults <- requestResult{
-			node:   node,
-			file:   f,
-			path:   of.path,
-			offset: b.block.Offset,
-			data:   bs,
-			err:    err,
+			node:     node,
+			file:     f,
+			filepath: of.filepath,
+			offset:   b.block.Offset,
+			data:     bs,
+			err:      err,
 		}
 	}(node, b)
 }
@@ -364,7 +364,7 @@ func (p *puller) handleEmptyBlock(b bqBlock) {
 
 	if f.Flags&protocol.FlagDeleted != 0 {
 		os.Remove(of.temp)
-		os.Remove(of.path)
+		os.Remove(of.filepath)
 	} else {
 		if debugPull {
 			dlog.Printf("pull: no blocks to fetch and nothing to copy for %q", f.Name)
@@ -372,7 +372,7 @@ func (p *puller) handleEmptyBlock(b bqBlock) {
 		t := time.Unix(f.Modified, 0)
 		os.Chtimes(of.temp, t, t)
 		os.Chmod(of.temp, os.FileMode(f.Flags&0777))
-		os.Rename(of.temp, of.path)
+		os.Rename(of.temp, of.filepath)
 	}
 	delete(p.openFiles, f.Name)
 	p.model.fs.Update(cid.LocalID, []scanner.File{f})

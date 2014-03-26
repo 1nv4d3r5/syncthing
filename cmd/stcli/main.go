@@ -6,7 +6,7 @@ import (
 	"io"
 	"log"
 	"os"
-	"path"
+	"path/filepath"
 
 	"github.com/calmh/syncthing/protocol"
 )
@@ -96,7 +96,7 @@ func (m Model) Index(nodeID string, files []protocol.FileInfo) {
 }
 
 func getFile(f protocol.FileInfo) {
-	fn := path.Base(f.Name)
+	fn := filepath.Base(f.Name)
 	fd, err := os.Create(fn)
 	if err != nil {
 		log.Fatal(err)

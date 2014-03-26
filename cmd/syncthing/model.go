@@ -1,13 +1,14 @@
 package main
 
 import (
+	"code.google.com/p/go.text/unicode/norm"
 	"crypto/sha1"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
-	"path"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -218,7 +219,7 @@ func (m *Model) NeedFiles() ([]scanner.File, int64) {
 func (m *Model) Index(nodeID string, fs []protocol.FileInfo) {
 	var files = make([]scanner.File, len(fs))
 	for i := range fs {
-		lamport.Clock(fs[i].Version)
+		lamport.Default.Tick(fs[i].Version)
 		files[i] = fileFromFileInfo(fs[i])
 	}
 
@@ -235,7 +236,7 @@ func (m *Model) Index(nodeID string, fs []protocol.FileInfo) {
 func (m *Model) IndexUpdate(nodeID string, fs []protocol.FileInfo) {
 	var files = make([]scanner.File, len(fs))
 	for i := range fs {
-		lamport.Clock(fs[i].Version)
+		lamport.Default.Tick(fs[i].Version)
 		files[i] = fileFromFileInfo(fs[i])
 	}
 
@@ -289,7 +290,7 @@ func (m *Model) Request(nodeID, repo, name string, offset int64, size int) ([]by
 	if debugNet && nodeID != "<local>" {
 		dlog.Printf("REQ(in): %s: %q o=%d s=%d", nodeID, name, offset, size)
 	}
-	fn := path.Join(m.dir, name)
+	fn := filepath.Join(m.dir, name)
 	fd, err := os.Open(fn) // XXX: Inefficient, should cache fd?
 	if err != nil {
 		return nil, err
@@ -320,7 +321,7 @@ func (m *Model) ReplaceLocal(fs []scanner.File) {
 func (m *Model) SeedLocal(fs []protocol.FileInfo) {
 	var sfs = make([]scanner.File, len(fs))
 	for i := 0; i < len(fs); i++ {
-		lamport.Clock(fs[i].Version)
+		lamport.Default.Tick(fs[i].Version)
 		sfs[i] = fileFromFileInfo(fs[i])
 	}
 
@@ -462,7 +463,8 @@ func fileFromFileInfo(f protocol.FileInfo) scanner.File {
 		offset += int64(b.Size)
 	}
 	return scanner.File{
-		Name:       f.Name,
+		// Name is with native separator and normalization
+		Name:       FSNormalize(filepath.FromSlash(f.Name)),
 		Size:       offset,
 		Flags:      f.Flags &^ protocol.FlagInvalid,
 		Modified:   f.Modified,
@@ -481,7 +483,8 @@ func fileInfoFromFile(f scanner.File) protocol.FileInfo {
 		}
 	}
 	pf := protocol.FileInfo{
-		Name:     f.Name,
+		// Name is with slash separator and NFC normalization
+		Name:     norm.NFC.String(filepath.ToSlash(f.Name)),
 		Flags:    f.Flags,
 		Modified: f.Modified,
 		Version:  f.Version,

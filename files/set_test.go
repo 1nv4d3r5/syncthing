@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/calmh/syncthing/cid"
+	"github.com/calmh/syncthing/lamport"
 	"github.com/calmh/syncthing/protocol"
 	"github.com/calmh/syncthing/scanner"
 )
@@ -69,6 +70,7 @@ func TestGlobalSet(t *testing.T) {
 
 func TestLocalDeleted(t *testing.T) {
 	m := NewSet()
+	lamport.Default = lamport.Clock{}
 
 	local1 := []scanner.File{
 		scanner.File{Name: "a", Version: 1000},

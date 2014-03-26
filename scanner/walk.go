@@ -5,7 +5,6 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
-	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -37,7 +36,7 @@ type Walker struct {
 }
 
 type TempNamer interface {
-	// Temporary returns a temporary name for the filed referred to by path.
+	// Temporary returns a temporary name for the filed referred to by filepath.
 	TempName(path string) string
 	// IsTemporary returns true if path refers to the name of temporary file.
 	IsTemporary(path string) bool
@@ -83,7 +82,7 @@ func (w *Walker) Walk() (files []File, ignore map[string][]string) {
 
 		for _, info := range fis {
 			if info.Mode()&os.ModeSymlink != 0 {
-				dir := path.Join(w.Dir, info.Name()) + "/"
+				dir := filepath.Join(w.Dir, info.Name()) + "/"
 				filepath.Walk(dir, w.loadIgnoreFiles(dir, ignore))
 				filepath.Walk(dir, hashFiles)
 			}
@@ -120,7 +119,7 @@ func (w *Walker) loadIgnoreFiles(dir string, ign map[string][]string) filepath.W
 			return nil
 		}
 
-		if pn, sn := path.Split(rn); sn == w.IgnoreFile {
+		if pn, sn := filepath.Split(rn); sn == w.IgnoreFile {
 			pn := strings.Trim(pn, "/")
 			bs, _ := ioutil.ReadFile(p)
 			lines := bytes.Split(bs, []byte("\n"))
@@ -165,7 +164,7 @@ func (w *Walker) walkAndHashFiles(res *[]File, ign map[string][]string) filepath
 			return nil
 		}
 
-		if _, sn := path.Split(rn); sn == w.IgnoreFile {
+		if _, sn := filepath.Split(rn); sn == w.IgnoreFile {
 			if debug {
 				dlog.Println("ignorefile:", rn)
 			}
@@ -234,7 +233,7 @@ func (w *Walker) walkAndHashFiles(res *[]File, ign map[string][]string) filepath
 			}
 			f := File{
 				Name:     rn,
-				Version:  lamport.Clock(0),
+				Version:  lamport.Default.Tick(0),
 				Size:     info.Size(),
 				Flags:    uint32(info.Mode()),
 				Modified: info.ModTime().Unix(),
@@ -258,11 +257,11 @@ func (w *Walker) cleanTempFile(path string, info os.FileInfo, err error) error {
 }
 
 func (w *Walker) ignoreFile(patterns map[string][]string, file string) bool {
-	first, last := path.Split(file)
+	first, last := filepath.Split(file)
 	for prefix, pats := range patterns {
 		if len(prefix) == 0 || prefix == first || strings.HasPrefix(first, prefix+"/") {
 			for _, pattern := range pats {
-				if match, _ := path.Match(pattern, last); match {
+				if match, _ := filepath.Match(pattern, last); match {
 					return true
 				}
 			}

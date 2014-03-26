@@ -2,18 +2,23 @@ package lamport
 
 import "sync"
 
-var clockVal uint64
-var clockMut sync.Mutex
+var Default = Clock{}
 
-func Clock(c uint64) uint64 {
-	clockMut.Lock()
-	if c > clockVal {
-		clockVal = c + 1
-		clockMut.Unlock()
-		return c + 1
+type Clock struct {
+	val uint64
+	mut sync.Mutex
+}
+
+func (c *Clock) Tick(v uint64) uint64 {
+	c.mut.Lock()
+	if v > c.val {
+		c.val = v + 1
+		c.mut.Unlock()
+		return v + 1
 	} else {
-		clockVal++
-		clockMut.Unlock()
-		return clockVal
+		c.val++
+		v = c.val
+		c.mut.Unlock()
+		return v
 	}
 }
