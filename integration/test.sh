@@ -36,7 +36,7 @@ testConvergence() {
 	done
 
 	echo "Verifying..."
-	cat md5-* | sort | uniq > md5-tot
+	( grep -v identical md5-1 ; cat md5-2 ; grep -v identical md5-3 ) | sort | uniq > md5-tot
 
 	for i in 1 2 3 ; do
 		pushd "s$i" >/dev/null
